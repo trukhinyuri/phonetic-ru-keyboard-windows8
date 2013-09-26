@@ -1,5 +1,4 @@
 #Phonetic Russian Keyboard for Windows
-=============================
 Copyright 2012-2013 Yuri Trukhin
 
 Licensed under the Apache License, Version 2.0 (the "License");
