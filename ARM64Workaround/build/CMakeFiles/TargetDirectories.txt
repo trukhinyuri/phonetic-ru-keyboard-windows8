@@ -1,0 +1,4 @@
+C:/Users/yuri/Documents/Sources/kli/build/CMakeFiles/kli.dir
+C:/Users/yuri/Documents/Sources/kli/build/CMakeFiles/inih.dir
+C:/Users/yuri/Documents/Sources/kli/build/CMakeFiles/ALL_BUILD.dir
+C:/Users/yuri/Documents/Sources/kli/build/CMakeFiles/ZERO_CHECK.dir

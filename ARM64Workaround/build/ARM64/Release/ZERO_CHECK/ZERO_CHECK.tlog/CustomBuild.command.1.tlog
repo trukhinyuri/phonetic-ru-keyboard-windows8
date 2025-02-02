@@ -1,0 +1,10 @@
+^C:\USERS\YURI\DOCUMENTS\SOURCES\KLI\BUILD\CMAKEFILES\E7327C6D2231097A150575F01CFDC81B\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/yuri/Documents/Sources/kli -BC:/Users/yuri/Documents/Sources/kli/build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file "C:/Users/yuri/Documents/Sources/kli/build/K(eyboard) L(ayout) I(nstaller).sln"
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
