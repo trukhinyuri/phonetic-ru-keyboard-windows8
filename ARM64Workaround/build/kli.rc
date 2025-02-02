@@ -1,0 +1,24 @@
+#include <winver.h>
+
+VS_VERSION_INFO VERSIONINFO
+PRODUCTVERSION	1,0,0,0
+FILEOS			VOS_NT
+FILETYPE		VFT_APP
+FILEVERSION		1,0,0,0
+BEGIN
+	BLOCK "StringFileInfo"
+	BEGIN
+		BLOCK "040904E4"
+		BEGIN
+			VALUE "FileDescription", "An application that takes care of installing the specified keyboard layout for you."
+			VALUE "FileVersion", "1.0.0.0"
+			VALUE "LegalCopyright", "Copyright (c) 2021 Davide Beatrici"
+			VALUE "ProductName", "K(eyboard) L(ayout) I(nstaller)"
+			VALUE "ProductVersion", "1.0.0.0"
+		END
+	END
+	BLOCK "VarFileInfo"
+	BEGIN
+		VALUE "Translation", 0x409, 1252
+	END
+END
