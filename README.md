@@ -9,7 +9,7 @@ Setup files for Macbook Pro 13 2011: "MacBook Pro 13 2011/Setup"
 ###Current status
 Fab 01, 2025: Added durty workaround for Windows ARM64 (ONLY FOR ARM64, tested on Surface 11 Pro with Qualcomm Snapdragon X Elite).
 For adding keyboard, use
-./WindowsARM64Workaround/build/Release/kli.exe
+./ARM64Workaround/build/Release/kli.exe
 
 To my great regret, Microsoft Keyboard Layout Creator 1.4 does not support ARM64, and Windows requires that the layout be installed via a binary file (utter madness!). Microsoft, please fix this—at the very least, add ARM64 support to MKLC, and even better, simply allow keyboard layouts to be described in text form, as is done in Linux.
 
