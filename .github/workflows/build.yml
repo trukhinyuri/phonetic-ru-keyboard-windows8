@@ -1,0 +1,99 @@
+name: build
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build and test (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build all architectures
+        run: |
+          # Release tags vMAJOR.MINOR.PATCH must match the .klc VERSION (MAJOR.MINOR);
+          # PATCH becomes the build number. Other builds use the run number.
+          $build = ${{ github.run_number }}
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            if ('${{ github.ref_name }}' -notmatch '^v(\d+\.\d+)\.(\d+)$') { throw 'Release tags must look like v2.0.0' }
+            $build = [int]$Matches[2]
+            Import-Module .\tools\KbdLayout.psm1
+            $klcVersion = (Read-KlcLayout .\layout\kbdrumph.klc).Version
+            if ($klcVersion -ne $Matches[1]) { throw "Tag ${{ github.ref_name }} does not match VERSION $klcVersion in layout\kbdrumph.klc" }
+          }
+          .\build.ps1 -Package -BuildNumber $build
+
+      - name: Check the package
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = Get-ChildItem out\*.zip | Select-Object -First 1
+          $entries = @([IO.Compression.ZipFile]::OpenRead($zip.FullName).Entries | ForEach-Object { $_.FullName })
+          if ($entries | Where-Object { $_.Contains('\') }) { throw 'Zip entry names must use / separators.' }
+          $root = $zip.BaseName + '/'
+          foreach ($f in 'install.cmd', 'Install.ps1', 'uninstall.cmd', 'Uninstall.ps1', 'README.txt', 'LICENSE', 'NOTICE', 'kbdrumph.klc',
+                         'arm64/kbdrumph.dll', 'amd64/kbdrumph.dll', 'x86/kbdrumph.dll', 'wow64/kbdrumph.dll') {
+            if ($entries -notcontains ($root + $f)) { throw "The package lacks $root$f" }
+          }
+          $entries
+
+      - name: Compare tables across architectures
+        run: .\tests\Test-Tables.ps1
+
+      - name: Check every key against macOS (tables)
+        run: .\tests\Test-Layout.ps1 -Mode Tables
+
+      - name: Install
+        run: .\out\package\Install.ps1
+
+      - name: Check every key against macOS (installed, ToUnicodeEx)
+        run: .\tests\Test-Layout.ps1 -Mode Installed
+
+      - name: Uninstall
+        run: |
+          $klid = (Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Keyboard Layouts' | Where-Object { $_.GetValue('Layout File') -eq 'kbdrumph.dll' }).PSChildName
+          .\out\package\Uninstall.ps1
+          if (Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Keyboard Layouts' | Where-Object { $_.GetValue('Layout File') -eq 'kbdrumph.dll' }) { throw 'Layout still registered after uninstall.' }
+          $left = @(foreach ($lang in Get-WinUserLanguageList) { $lang.InputMethodTips | Where-Object { $_ -like "*:$klid" } })
+          if ($left.Count) { throw "Input methods left after uninstall: $($left -join ', ')" }
+
+      # The ARM64 runner is the one that loads and tests all four DLLs
+      # (x64 and x86 under emulation), so it provides the released package.
+      - name: Upload package
+        if: matrix.runner == 'windows-11-arm'
+        uses: actions/upload-artifact@v7
+        with:
+          name: package
+          path: |
+            out/*.zip
+            out/*.zip.sha256
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: package
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" *.zip *.zip.sha256 --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
