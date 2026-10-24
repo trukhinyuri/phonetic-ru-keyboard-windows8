@@ -1,0 +1,20 @@
+root = true
+
+[*]
+charset = utf-8
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{cmd,ps1,psm1}]
+end_of_line = crlf
+
+[*.klc]
+# MSKLC format: UTF-16LE with BOM, tab separated (see .gitattributes).
+charset = utf-16le
+end_of_line = crlf
+indent_style = tab
+
+[*.{md,yml,json}]
+indent_size = 2

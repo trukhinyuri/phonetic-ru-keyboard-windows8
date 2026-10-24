@@ -1,0 +1,18 @@
+# Build output (build.ps1, tests)
+/out/
+
+# MSVC by-products if tools are run by hand
+*.obj
+*.res
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# Editors and OS
+.vs/
+.vscode/
+*.swp
+Thumbs.db
+desktop.ini
+*:Zone.Identifier
