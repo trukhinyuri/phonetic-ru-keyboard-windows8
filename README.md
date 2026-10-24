@@ -99,6 +99,7 @@ build tools and a **Windows SDK**.
 
 ```powershell
 .\build.ps1 -Package              # out\bin\<arch>\kbdrumph.dll and out\kbdrumph-<version>.zip
+.\tests\Test-Generator.ps1        # .klc parser and generator regression cases
 .\tests\Test-Tables.ps1           # all architectures contain identical tables
 .\tests\Test-Layout.ps1           # every key and modifier state matches macOS
 .\tests\Test-Layout.ps1 -Mode Installed   # the same, asked from Windows (after installing)
@@ -110,7 +111,7 @@ build tools and a **Windows SDK**.
 | [`tools/KbdLayout.psm1`](tools/KbdLayout.psm1) | Turns the `.klc` file into the C tables, resources and exports of a layout DLL, with the same tables MSKLC's own compiler produces. |
 | [`build.ps1`](build.ps1) | Builds `arm64` (ARM64X, like Windows' own ARM64 layouts), `amd64`, `x86` and `wow64` DLLs with MSVC. |
 | [`installer/`](installer) | `Install.ps1` / `Uninstall.ps1` and the double-click `.cmd` wrappers. |
-| [`tests/`](tests) | Table comparison across architectures, plus key-by-key checks against [`macos-russian-qwerty.json`](tests/macos-russian-qwerty.json), Apple's layout transcribed per key and modifier state. |
+| [`tests/`](tests) | Generator regression cases, table comparison across architectures, and key-by-key checks against [`macos-russian-qwerty.json`](tests/macos-russian-qwerty.json), Apple's layout transcribed per key and modifier state. |
 | [`tools/kbddump/`](tools/kbddump) | A small tool that prints all tables of a layout DLL. |
 | [`tools/New-LayoutChart.ps1`](tools/New-LayoutChart.ps1) | Draws `docs/layout.svg` from the `.klc` file. |
 
@@ -124,8 +125,9 @@ reads. The table test compiles the same file with MSKLC's `kbdutool` (pass
 `-KbdUtool <path>`) and requires identical tables.
 
 GitHub Actions runs on every push to `master`, every pull request and every
-`v*` tag, on x64 and on native ARM64 Windows. It builds all architectures,
-compares their tables, checks every key against macOS, installs the layout,
+`v*` tag, on x64 and on native ARM64 Windows. It runs the generator tests,
+builds all architectures, compares their tables, checks every key against
+macOS, installs the layout,
 checks it again through `ToUnicodeEx`, uninstalls it, and publishes a release
 for every `v*` tag. The MSKLC comparison does not run in CI, because MSKLC
 cannot be redistributed. After changing `tools/KbdLayout.psm1`, install MSKLC
@@ -138,7 +140,9 @@ This repository started in 2012 with MSKLC layouts for Boot Camp on a MacBook
 Pro 13 (2011) and later a MacBook Pro Retina 15 (2013) under Windows 8. In 2025
 an ARM64 workaround was added for a Surface Pro. Version 2.0 (2026) replaces
 all of them with a single layout taken from Apple's data and built for every
-architecture; the old files remain in the git history. See
+architecture. The old layouts remain in the git history; a copy of Microsoft
+Keyboard Layout Creator that the ARM64 workaround had included was purged from
+it, because its licence does not allow redistribution. See
 [CHANGELOG.md](CHANGELOG.md).
 
 ## License

@@ -47,7 +47,15 @@ if (-not $OutDir) { $OutDir = Join-Path $PSScriptRoot 'out' }
 $Layout = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Layout)
 $OutDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutDir)
 
-if ($Clean -and (Test-Path $OutDir)) { Remove-Item -Recurse -Force $OutDir }
+if ($Clean -and (Test-Path -LiteralPath $OutDir)) {
+    # Delete only what the build and the tests create, never a whole folder
+    # that a mistyped -OutDir points at.
+    foreach ($sub in 'obj', 'bin', 'package', 'test') {
+        $d = Join-Path $OutDir $sub
+        if (Test-Path -LiteralPath $d) { Remove-Item -LiteralPath $d -Recurse -Force }
+    }
+    Get-ChildItem -LiteralPath $OutDir -File | Where-Object { $_.Name -match '^[A-Za-z0-9_]+-\d+\.\d+\.\d+\.zip(\.sha256)?$' } | Remove-Item -Force
+}
 Write-Host "Host: $(Get-HostArch); toolset: $(Find-VcVarsAll)"
 
 $klc = Read-KlcLayout -Path $Layout
@@ -106,7 +114,7 @@ if ($Package) {
     $parts = @($klc.Version.Split('.')) + @('0', '0')
     $version = '{0}.{1}.{2}' -f $parts[0], $parts[1], $BuildNumber
     $pkg = Join-Path $OutDir 'package'
-    if (Test-Path $pkg) { Remove-Item -Recurse -Force $pkg }
+    if (Test-Path -LiteralPath $pkg) { Remove-Item -LiteralPath $pkg -Recurse -Force }
     $null = New-Item -ItemType Directory -Force -Path $pkg
     foreach ($t in $Target) {
         $null = New-Item -ItemType Directory -Force -Path (Join-Path $pkg $t)
@@ -121,7 +129,7 @@ if ($Package) {
     # Windows PowerShell 5.1 writes '\', which macOS and Linux unzip tools
     # turn into flat file names.)
     $zip = Join-Path $OutDir "$name-$version.zip"
-    if (Test-Path $zip) { Remove-Item -Force $zip }
+    if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
     Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
     $archive = [IO.Compression.ZipFile]::Open($zip, [IO.Compression.ZipArchiveMode]::Create)
     try {

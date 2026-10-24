@@ -13,13 +13,20 @@
 
     Supported .klc features: KBD, COPYRIGHT, COMPANY, LOCALENAME, LOCALEID,
     VERSION, ATTRIBUTES (ALTGR, SHIFTLOCK, LRM_RLM), SHIFTSTATE, LAYOUT (Cap
-    flags 0/1/4/5 and SGCap, dead keys "xxxx@", ligatures "%%"), DEADKEY,
-    LIGATURE, KEYNAME, KEYNAME_EXT, KEYNAME_DEAD, DESCRIPTIONS, LANGUAGENAMES,
-    ENDKBD. An SGCap key must be followed directly by one "-1 -1 ..." row that
-    gives what the key types while Caps Lock is on; that row may only contain
+    flags 0/1/4/5 and SGCap, dead keys "xxxx@", ligatures "%%"), DEADKEY
+    (including chained dead keys "xxxx@"), LIGATURE, KEYNAME, KEYNAME_EXT,
+    KEYNAME_DEAD, DESCRIPTIONS, LANGUAGENAMES, ENDKBD.
+
+    An SGCap key is followed directly by one "-1 -1 <cap> ..." row that gives
+    what the key types while Caps Lock is on. That row may only contain
     characters or -1, and an SGCap key cannot have dead keys or ligatures.
-    Anything else that MSKLC would not compile is rejected rather than
-    compiled incorrectly.
+    MSKLC saves the row with only the Caps and Shift+Caps columns; missing
+    columns keep the main row's values (kbdutool would leave U+0000 there).
+    Missing trailing columns of a normal row type nothing.
+
+    Deliberately not supported, and rejected rather than compiled differently:
+    extended (e0xx) scancodes in LAYOUT, and the Alt-only shift states 4 and 5,
+    which MSKLC itself cannot write.
 #>
 
 Set-StrictMode -Version Latest
@@ -44,6 +51,8 @@ $script:SpecialKeys = @(
 function Split-KlcLine {
     # Splits a .klc line into whitespace-separated tokens, honouring double
     # quotes and dropping "//" and ";" comments that appear outside quotes.
+    # Inside quotes \" and \\ are unescaped (kbdutool pastes such strings into
+    # C literals); the token keeps its outer quotes for Get-Unquoted.
     param([string]$Line)
     $tokens = New-Object System.Collections.Generic.List[string]
     $i = 0
@@ -53,10 +62,21 @@ function Split-KlcLine {
         if ($c -eq ';') { break }
         if ($c -eq '/' -and $i + 1 -lt $Line.Length -and $Line[$i + 1] -eq '/') { break }
         if ($c -eq '"') {
-            $end = $Line.IndexOf('"', $i + 1)
-            if ($end -lt 0) { throw "Unterminated string in line: $Line" }
-            $tokens.Add($Line.Substring($i, $end - $i + 1))
-            $i = $end + 1
+            $sb = New-Object System.Text.StringBuilder
+            [void]$sb.Append('"')
+            $i++
+            $closed = $false
+            while ($i -lt $Line.Length) {
+                $ch = $Line[$i]
+                if ($ch -eq '\' -and $i + 1 -lt $Line.Length -and ($Line[$i + 1] -eq '"' -or $Line[$i + 1] -eq '\')) {
+                    [void]$sb.Append($Line[$i + 1]); $i += 2; continue
+                }
+                if ($ch -eq '"') { $closed = $true; $i++; break }
+                [void]$sb.Append($ch); $i++
+            }
+            if (-not $closed) { throw "Unterminated string in line: $Line" }
+            [void]$sb.Append('"')
+            $tokens.Add($sb.ToString())
             continue
         }
         $start = $i
@@ -72,6 +92,17 @@ function Get-KlcText([string]$Line) {
     $m = [regex]::Match($Line, '^\s*[0-9A-Fa-f]+\s+(.*?)\s*$')
     if (-not $m.Success) { throw "Invalid text row: $Line" }
     $m.Groups[1].Value
+}
+
+function Get-KeyName([string]$Line, [string[]]$Tokens, [string]$Context) {
+    # KEYNAME rows: "<code> <name>". A quoted name is one token; an unquoted
+    # name is the rest of the row, as kbdutool reads it ("1c e f" is "e f").
+    if ($Tokens.Count -lt 2) { throw "Key name row needs a name ($Context)" }
+    if ($Tokens[1].StartsWith('"')) {
+        if ($Tokens.Count -ne 2) { throw "Unexpected text after the quoted key name ($Context): $Line" }
+        return Get-Unquoted $Tokens[1]
+    }
+    $Tokens[1..($Tokens.Count - 1)] -join ' '
 }
 
 function Get-Unquoted([string]$Token) {
@@ -162,30 +193,47 @@ function Read-KlcLayout {
             'ATTRIBUTES' { $layout.Attributes.Add($head.ToUpperInvariant()) }
             'SHIFTSTATE' { $layout.ShiftStates.Add([int]$head) }
             'LAYOUT' {
+                # Rows may be shorter than SHIFTSTATE: kbdutool accepts that,
+                # and MSKLC itself saves SGCap rows with only the Caps and
+                # Shift+Caps columns.
                 $n = $layout.ShiftStates.Count
-                if ($tokens.Count -lt 3 + $n) { throw "LAYOUT row needs $n shift-state columns ($ctx)" }
+                $have = [Math]::Min($n, $tokens.Count - 3)
+                if ($have -lt 1) { throw "LAYOUT row needs at least one shift-state column ($ctx)" }
                 $values = @()
-                for ($c = 0; $c -lt $n; $c++) { $values += ConvertFrom-KlcValue $tokens[3 + $c] "$ctx, column $c" }
+                for ($c = 0; $c -lt $have; $c++) { $values += ConvertFrom-KlcValue $tokens[3 + $c] "$ctx, column $c" }
                 if ($head -eq '-1') {
-                    # SGCap continuation row: what the previous key types while Caps Lock is on.
+                    # SGCap continuation row: what the previous key types while
+                    # Caps Lock is on. Missing columns keep the main row's value
+                    # (MSKLC's meaning; kbdutool would leave U+0000 there).
                     $prev = $null
                     if ($layout.Keys.Count) { $prev = $layout.Keys[$layout.Keys.Count - 1] }
                     if (-not $prev -or -not $prev.SGCap -or $prev.CapsValues) { throw "Unexpected SGCap continuation row ($ctx)" }
+                    for ($c = $have; $c -lt $n; $c++) { $values += $prev.Values[$c] }
                     if (@($values | Where-Object { $_.Kind -ne 'Char' -and $_.Kind -ne 'None' }).Count) { throw "SGCap rows may only contain characters ($ctx)" }
                     $prev.CapsValues = $values
                     continue
                 }
+                # Missing trailing columns of a normal row type nothing.
+                for ($c = $have; $c -lt $n; $c++) { $values += [pscustomobject]@{ Kind = 'None'; Code = $null } }
+                $scancode = [Convert]::ToInt32($head, 16)
+                if ($scancode -gt 0x7E) { throw ("Scancode {0} is not supported: only 00-7e, not extended e0xx rows ({1})" -f $head, $ctx) }
                 $sgcap = $tokens[2] -ieq 'SGCap'
                 if ($sgcap) { $cap = 0 } else { $cap = [int]$tokens[2] }
                 if (@(0, 1, 4, 5) -notcontains $cap) { throw "Unsupported Cap value $cap ($ctx)" }
                 $layout.Keys.Add([pscustomobject]@{
-                    Scancode = [Convert]::ToInt32($head, 16); Vk = $tokens[1].ToUpperInvariant(); Cap = $cap
+                    Scancode = $scancode; Vk = $tokens[1].ToUpperInvariant(); Cap = $cap
                     SGCap = $sgcap; Values = $values; CapsValues = $null
                 })
             }
             'DEADKEY' {
+                if ($tokens.Count -lt 2) { throw "DEADKEY row needs a base and a composed value ($ctx)" }
+                # A composed value ending in '@' is itself a dead key (chained,
+                # DKF_DEAD), as in kbdutool.
+                $composed = $tokens[1]
+                $flags = 0
+                if ($composed.Length -gt 1 -and $composed.EndsWith('@')) { $flags = 1; $composed = $composed.Substring(0, $composed.Length - 1) }
                 $layout.DeadKeys[$deadKey].Add([pscustomobject]@{
-                    Base = ConvertFrom-KlcHex $tokens[0] $ctx; Composed = ConvertFrom-KlcHex $tokens[1] $ctx
+                    Base = ConvertFrom-KlcHex $tokens[0] $ctx; Composed = ConvertFrom-KlcHex $composed $ctx; Flags = $flags
                 })
             }
             'LIGATURE' {
@@ -193,9 +241,9 @@ function Read-KlcLayout {
                 for ($c = 2; $c -lt $tokens.Count; $c++) { $chars += ConvertFrom-KlcHex $tokens[$c] $ctx }
                 $layout.Ligatures.Add([pscustomobject]@{ Vk = $tokens[0].ToUpperInvariant(); Column = [int]$tokens[1]; Chars = $chars })
             }
-            'KEYNAME' { $layout.KeyNames.Add([pscustomobject]@{ Scancode = [Convert]::ToInt32($head, 16); Name = Get-Unquoted $tokens[1] }) }
-            'KEYNAME_EXT' { $layout.KeyNamesExt.Add([pscustomobject]@{ Scancode = [Convert]::ToInt32($head, 16); Name = Get-Unquoted $tokens[1] }) }
-            'KEYNAME_DEAD' { $layout.KeyNamesDead.Add([pscustomobject]@{ Char = ConvertFrom-KlcHex $head $ctx; Name = Get-Unquoted $tokens[1] }) }
+            'KEYNAME' { $layout.KeyNames.Add([pscustomobject]@{ Scancode = [Convert]::ToInt32($head, 16); Name = Get-KeyName $rawLine $tokens $ctx }) }
+            'KEYNAME_EXT' { $layout.KeyNamesExt.Add([pscustomobject]@{ Scancode = [Convert]::ToInt32($head, 16); Name = Get-KeyName $rawLine $tokens $ctx }) }
+            'KEYNAME_DEAD' { $layout.KeyNamesDead.Add([pscustomobject]@{ Char = ConvertFrom-KlcHex $head $ctx; Name = Get-KeyName $rawLine $tokens $ctx }) }
             'DESCRIPTIONS' { $layout.Descriptions['{0:x4}' -f [Convert]::ToInt32($head, 16)] = Get-KlcText $rawLine }
             'LANGUAGENAMES' { $layout.LanguageNames['{0:x4}' -f [Convert]::ToInt32($head, 16)] = Get-KlcText $rawLine }
             default { throw "Unexpected content outside a known section ($ctx): $rawLine" }
@@ -224,6 +272,11 @@ function Read-KlcLayout {
             if ($v.Kind -eq 'Ligature' -and -not ($layout.Ligatures | Where-Object { $_.Vk -eq $k.Vk -and $_.Column -eq $c })) { throw "Ligature on $($k.Vk) column $c has no LIGATURE entry." }
         }
     }
+    foreach ($accent in $layout.DeadKeys.Keys) {
+        foreach ($e in $layout.DeadKeys[$accent]) {
+            if ($e.Flags -and -not $layout.DeadKeys.Contains(('{0:x4}' -f $e.Composed))) { throw ('Chained dead key {0:x4} in DEADKEY {1} has no DEADKEY table.' -f $e.Composed, $accent) }
+        }
+    }
     [pscustomobject]$layout
 }
 
@@ -249,8 +302,9 @@ function Format-CString([string]$Value) {
 }
 
 function Format-RcString([string]$Value) {
-    # .rc files are compiled as UTF-8 (#pragma code_page(65001)); only quotes need escaping.
-    '"' + $Value.Replace('"', '""') + '"'
+    # .rc files are compiled as UTF-8 (#pragma code_page(65001)); rc.exe reads
+    # backslash escapes and "" as a quote inside string literals.
+    '"' + $Value.Replace('\', '\\').Replace('"', '""') + '"'
 }
 
 function Get-VkExpression([string]$Vk) {
@@ -304,9 +358,13 @@ function Write-KbdSources {
     Add '#endif'
     Add ''
 
-    # Scancode -> VK overrides for the alphanumeric block (numpad scancodes keep
-    # their KBDNUMPAD | KBDSPECIAL defaults, exactly as kbdutool does).
-    $overrides = @($Layout.Keys | Where-Object { $_.Scancode -le 0x7E -and -not ($_.Scancode -ge 0x47 -and $_.Scancode -le 0x53) })
+    # Scancode -> VK overrides from the LAYOUT rows. A numpad row that names
+    # the key's NumLock VK (NUMPAD0-9, DECIMAL) describes kbd.h's default
+    # (navigation VK + KBDNUMPAD | KBDSPECIAL) and gets no override; any other
+    # VK is overridden and keeps the ausVK flags, as in kbdutool's output.
+    $numLockVk = @{ 0x47 = 'NUMPAD7'; 0x48 = 'NUMPAD8'; 0x49 = 'NUMPAD9'; 0x4B = 'NUMPAD4'; 0x4C = 'NUMPAD5'
+        0x4D = 'NUMPAD6'; 0x4F = 'NUMPAD1'; 0x50 = 'NUMPAD2'; 0x51 = 'NUMPAD3'; 0x52 = 'NUMPAD0'; 0x53 = 'DECIMAL' }
+    $overrides = @($Layout.Keys | Where-Object { -not ($numLockVk.ContainsKey($_.Scancode) -and $numLockVk[$_.Scancode] -eq $_.Vk) })
     if ($overrides.Count) {
         Add '/* Scancode to virtual key assignments from the LAYOUT section. */'
         foreach ($k in $overrides) {
@@ -435,11 +493,6 @@ static ALLOC_SECTION_LDATA VK_TO_BIT aVkToBits[] = {
     }
     $defined = @{}
     foreach ($k in $Layout.Keys) { $defined[$k.Vk] = $true }
-    foreach ($s in $script:SpecialKeys) {
-        if ($defined.ContainsKey($s.Vk)) { continue }
-        $cells = @($s.Values | ForEach-Object { Format-WChar $_ })
-        Add-Row $cells.Count ('    {{ {0,-14}, 0, {1} }},' -f "VK_$($s.Vk)", ($cells -join ', '))
-    }
     foreach ($k in $Layout.Keys) {
         $attrs = @()
         if ($k.Cap -band 1) { $attrs += 'CAPLOK' }
@@ -457,15 +510,21 @@ static ALLOC_SECTION_LDATA VK_TO_BIT aVkToBits[] = {
                 default { $cells += (Format-WChar $v.Code); $deadCells += 'WCH_NONE' }
             }
         }
-        $label = ''
-        if ($k.Vk -notmatch '^[0-9A-Z]$') { $label = '' }
-        Add-Row $nCols ('    {{ {0,-14}, {1}, {2} }},{3}' -f (Get-VkExpression $k.Vk), $attr, ($cells -join ', '), $label)
+        Add-Row $nCols ('    {{ {0,-14}, {1}, {2} }},' -f (Get-VkExpression $k.Vk), $attr, ($cells -join ', '))
         if ($hasDead) { Add-Row $nCols ('    {{ {0,-14}, 0, {1} }},' -f '0xff', ($deadCells -join ', ')) }
         if ($k.SGCap) {
             # Caps Lock row: same VK, read by win32k instead of the row above while Caps Lock is on.
             $capsCells = @($k.CapsValues | ForEach-Object { if ($_.Kind -eq 'None') { 'WCH_NONE' } else { Format-WChar $_.Code } })
             Add-Row $nCols ('    {{ {0,-14}, 0, {1} }},' -f (Get-VkExpression $k.Vk), ($capsCells -join ', '))
         }
+    }
+    # Default rows for keys the LAYOUT does not define. Like kbdutool, they
+    # follow the layout rows, which matters when they share the 3-column table
+    # (SHIFTSTATE 0 1 2): VkKeyScan returns the first match.
+    foreach ($s in $script:SpecialKeys) {
+        if ($defined.ContainsKey($s.Vk)) { continue }
+        $cells = @($s.Values | ForEach-Object { Format-WChar $_ })
+        Add-Row $cells.Count ('    {{ {0,-14}, 0, {1} }},' -f "VK_$($s.Vk)", ($cells -join ', '))
     }
     foreach ($d in 0..9) { Add-Row 1 ('    {{ {0,-14}, 0, {1} }},' -f "VK_NUMPAD$d", (Format-WChar (0x30 + $d))) }
 
@@ -508,7 +567,7 @@ static ALLOC_SECTION_LDATA VK_TO_BIT aVkToBits[] = {
         Add 'static ALLOC_SECTION_LDATA DEADKEY aDeadKey[] = {'
         foreach ($accent in $Layout.DeadKeys.Keys) {
             foreach ($e in $Layout.DeadKeys[$accent]) {
-                Add ('    DEADTRANS({0}, 0x{1}, {2}, 0x0000),' -f (Format-WChar $e.Base), $accent, (Format-WChar $e.Composed))
+                Add ('    DEADTRANS({0}, 0x{1}, {2}, 0x{3:x4}),' -f (Format-WChar $e.Base), $accent, (Format-WChar $e.Composed), $e.Flags)
             }
             Add ''
         }
@@ -610,15 +669,21 @@ static ALLOC_SECTION_LDATA VK_TO_BIT aVkToBits[] = {
     AddR '    END'
     AddR 'END'
     AddR ''
-    $langs = @($Layout.Descriptions.Keys)
-    if ($langs.Count -eq 0) { $langs = @('0409'); $Layout.Descriptions['0409'] = $Layout.Description }
+    # One string table per language named in DESCRIPTIONS or LANGUAGENAMES,
+    # as kbdutool writes them; a layout without DESCRIPTIONS still gets its
+    # English display name (string 1000) from the KBD line.
+    $descriptions = [ordered]@{}
+    foreach ($k in $Layout.Descriptions.Keys) { $descriptions[$k] = $Layout.Descriptions[$k] }
+    if ($descriptions.Count -eq 0) { $descriptions['0409'] = $Layout.Description }
+    $langs = New-Object System.Collections.Generic.List[string]
+    foreach ($k in @($descriptions.Keys) + @($Layout.LanguageNames.Keys)) { if (-not $langs.Contains($k)) { $langs.Add($k) } }
     foreach ($ui in $langs) {
         $langId = [Convert]::ToInt32($ui, 16)
         AddR ('STRINGTABLE LANGUAGE 0x{0:x2}, 0x{1:x2}' -f ($langId -band 0x3FF), ($langId -shr 10))
         AddR 'BEGIN'
-        AddR "    1000 $(Format-RcString $Layout.Descriptions[$ui])"
+        if ($descriptions.Contains($ui)) { AddR "    1000 $(Format-RcString $descriptions[$ui])" }
         if ($Layout.LanguageNames.Contains($ui)) { AddR "    1100 $(Format-RcString $Layout.LanguageNames[$ui])" }
-        AddR "    1200 $(Format-RcString $Layout.LocaleName)"
+        if ($descriptions.Contains($ui)) { AddR "    1200 $(Format-RcString $Layout.LocaleName)" }
         AddR 'END'
         AddR ''
     }

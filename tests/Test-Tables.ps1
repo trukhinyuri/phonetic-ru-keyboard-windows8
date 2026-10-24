@@ -52,8 +52,10 @@ function Build-KbdDump([string]$t) {
     $null = New-Item -ItemType Directory -Force -Path $dir
     $exe = Join-Path $dir 'kbddump.exe'
     $def = Get-BuildTarget $t
+    # /Fo names a file: an argument ending in '\' breaks Windows PowerShell's
+    # quoting when the path contains a space.
     Invoke-VcTool -Target $t -Tool 'cl.exe' -Arguments (@('/nologo', '/W4', '/WX', '/O1', '/MT', '/utf-8', '/DUNICODE', '/D_UNICODE') +
-        $def.Defines + @("/Fo$dir\", "/Fe$exe", $source))
+        $def.Defines + @("/Fo$(Join-Path $dir 'kbddump.obj')", "/Fe$exe", $source))
     $exe
 }
 
@@ -61,6 +63,35 @@ function Get-Dump([string]$exe, [string]$dll) {
     $text = & $exe $dll
     if ($LASTEXITCODE -ne 0) { throw "kbddump failed for $dll" }
     ($text -join "`n") + "`n"
+}
+
+function ConvertTo-DumpString([string]$Value) {
+    # Escapes text the way kbddump prints it.
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($ch in $Value.ToCharArray()) {
+        $code = [int]$ch
+        if ($code -ge 0x20 -and $code -lt 0x7f -and $ch -ne [char]'"' -and $ch -ne [char]'\') { [void]$sb.Append($ch) }
+        else { [void]$sb.AppendFormat('\u{0:x4}', $code) }
+    }
+    $sb.ToString()
+}
+
+function Write-Difference([string]$Expected, [string]$Actual) {
+    # Shows the first differing lines in order (Compare-Object ignores order).
+    $a = @($Expected -split "`n"); $b = @($Actual -split "`n")
+    for ($i = 0; $i -lt [Math]::Max($a.Count, $b.Count); $i++) {
+        if ($i -ge $a.Count -or $i -ge $b.Count -or $a[$i] -cne $b[$i]) {
+            $from = [Math]::Max(0, $i - 2)
+            Write-Host "  first difference at line $($i + 1):"
+            for ($j = $from; $j -lt [Math]::Min($i + 8, [Math]::Max($a.Count, $b.Count)); $j++) {
+                $l = ''; $r = ''
+                if ($j -lt $a.Count) { $l = $a[$j] }
+                if ($j -lt $b.Count) { $r = $b[$j] }
+                Write-Host ('  {0,-40} | {1}' -f $l, $r)
+            }
+            return
+        }
+    }
 }
 
 function Get-TablesOnly([string]$dump) {
@@ -98,7 +129,7 @@ foreach ($t in $dumps.Keys) {
     if ($dumps[$t] -cne $dumps[$first]) {
         $failed = $true
         Write-Host "FAIL: $t tables differ from $first" -ForegroundColor Red
-        Compare-Object ($dumps[$first] -split "`n") ($dumps[$t] -split "`n") | Select-Object -First 20 | Format-Table -AutoSize | Out-String | Write-Host
+        Write-Difference $dumps[$first] $dumps[$t]
     } else {
         Write-Host "PASS: $t tables identical to $first" -ForegroundColor Green
     }
@@ -106,11 +137,14 @@ foreach ($t in $dumps.Keys) {
 
 # The registry's "Layout Display Name" points at string 1000, and the version
 # resource must identify a keyboard driver DLL (VFT_DLL / VFT2_DRV_KEYBOARD).
-$description = $klc.Description
-if ($klc.Descriptions.Contains('0409')) { $description = $klc.Descriptions['0409'] }
-$expectedName = 'string 1000 lang 0409 "' + $description + '"'
+$expectedLines = @('version type 2 subtype 2 os 00040004')
+if ($klc.Descriptions.Count) {
+    foreach ($ui in $klc.Descriptions.Keys) { $expectedLines += ('string 1000 lang {0} "{1}"' -f $ui, (ConvertTo-DumpString $klc.Descriptions[$ui])) }
+} else {
+    $expectedLines += ('string 1000 lang 0409 "{0}"' -f (ConvertTo-DumpString $klc.Description))
+}
 $resourceLines = @($dumps[$first] -split "`n")
-foreach ($expectedLine in @($expectedName, 'version type 2 subtype 2 os 00040004')) {
+foreach ($expectedLine in $expectedLines) {
     if ($resourceLines -ccontains $expectedLine) { Write-Host "PASS: resources contain $expectedLine" -ForegroundColor Green }
     else { $failed = $true; Write-Host "FAIL: resources lack $expectedLine" -ForegroundColor Red }
 }
@@ -135,8 +169,8 @@ if ($KbdUtool) {
         $ref = Get-TablesOnly $ref
         if ($ref -cne $ours) {
             $failed = $true
-            Write-Host "FAIL: $t tables differ from the MSKLC build" -ForegroundColor Red
-            Compare-Object ($ref -split "`n") ($ours -split "`n") | Select-Object -First 40 | Format-Table -AutoSize | Out-String | Write-Host
+            Write-Host "FAIL: $t tables differ from the MSKLC build (left: MSKLC, right: ours)" -ForegroundColor Red
+            Write-Difference $ref $ours
         } else {
             Write-Host "PASS: $t tables identical to the MSKLC (kbdutool) build" -ForegroundColor Green
         }

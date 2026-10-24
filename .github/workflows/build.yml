@@ -24,6 +24,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Test the .klc parser and generator
+        run: .\tests\Test-Generator.ps1
+
       - name: Build all architectures
         run: |
           # Release tags vMAJOR.MINOR.PATCH must match the .klc VERSION (MAJOR.MINOR);

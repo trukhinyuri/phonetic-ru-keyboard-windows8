@@ -40,14 +40,16 @@ the earlier per-MacBook layouts.
 
 - The `.klc` source (MSKLC 1.4 format) is compiled by a current MSVC through
   `build.ps1`, and produces the same tables as MSKLC's own compiler.
-- New tests check that all architectures have identical tables and that every
+- New tests check the `.klc` parser and generator against cases verified
+  with MSKLC, that all architectures have identical tables, and that every
   key and modifier state matches macOS, both from the tables and through
   Windows' `ToUnicodeEx`. GitHub Actions runs them on x64 and ARM64 runners. A
   local check (`Test-Tables.ps1 -KbdUtool`) also requires the tables to match
   an MSKLC build.
 - Removed from the repository:
   - the vendored copy of Microsoft Keyboard Layout Creator, whose licence does
-    not allow redistribution (it remains in the history of the 1.x commits);
+    not allow redistribution (it was also purged from the git history, which
+    rewrote the commits from 2025-02-02 on);
   - committed build output;
   - a broken submodule;
   - a file whose name is invalid on Windows (`...:Zone.Identifier`), which made
